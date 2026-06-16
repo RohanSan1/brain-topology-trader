@@ -24,7 +24,6 @@ image = (
 _secrets = [
     modal.Secret.from_name("alpaca-secret"),
     modal.Secret.from_name("twelvedata-secret"),
-    modal.Secret.from_name("fred-secret"),
     modal.Secret.from_name("finnhub-secret"),
     modal.Secret.from_name("notify-secret"),
 ]
@@ -59,19 +58,16 @@ def run_inference_and_execute():
     log = get_logger("inference")
     log.info("=== Inference + Execution start %s ===", datetime.now(timezone.utc).isoformat())
 
-    # ── 1. Fetch raw data ────────────────────────────────────────────────────
     ingestor = DataIngestor()
     ohlcv = ingestor.fetch_ohlcv_all(config.TICKER_UNIVERSE)
     macro = ingestor.fetch_macro()
     sentiment = ingestor.fetch_sentiment(config.TICKER_UNIVERSE)
     log.info("Data fetched: %d tickers OHLCV", len(ohlcv))
 
-    # ── 2. Feature engineering ───────────────────────────────────────────────
     engineer = FeatureEngineer()
     features = engineer.compute_features(ohlcv, macro, sentiment)
     log.info("Features ready for %d tickers", len(features))
 
-    # ── 3. Load model ────────────────────────────────────────────────────────
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = NCPTradingModel(
         num_stocks=len(config.TICKER_UNIVERSE),
@@ -94,7 +90,6 @@ def run_inference_and_execute():
     model.eval()
     ticker_to_idx = {t: i for i, t in enumerate(config.TICKER_UNIVERSE)}
 
-    # ── 4. Inference ─────────────────────────────────────────────────────────
     raw_signals: dict[str, list[float]] = {}
     with torch.no_grad():
         for ticker, feat_seq in features.items():
@@ -102,20 +97,17 @@ def run_inference_and_execute():
                 continue
             x = torch.FloatTensor(feat_seq[-config.SEQUENCE_LENGTH:]).unsqueeze(0).to(device)
             idx = torch.LongTensor([ticker_to_idx.get(ticker, 0)]).to(device)
-            probs = model(x, idx)          # (1, 3) softmax
+            probs = model(x, idx)
             raw_signals[ticker] = probs.squeeze(0).cpu().tolist()
 
     log.info("Inference complete: %d tickers", len(raw_signals))
 
-    # ── 5. Signal smoothing + ranking ────────────────────────────────────────
     processor = SignalProcessor()
     smoothed = processor.smooth_and_rank(raw_signals)
 
-    # ── 6. Trade execution ───────────────────────────────────────────────────
     broker = AlpacaBroker()
     sizer = KellySizer()
     portfolio_value = broker.get_portfolio_value()
-
     broker.close_stale_positions(smoothed, config.SIGNAL_THRESHOLD, config.MIN_HOLD_DAYS)
 
     orders = []
@@ -137,11 +129,9 @@ def run_inference_and_execute():
         if order:
             orders.append(order)
 
-    # ── 7. Persist state ─────────────────────────────────────────────────────
     processor.save_signals(raw_signals)
     vol.commit()
 
-    # ── 8. Report ────────────────────────────────────────────────────────────
     send_daily_report({
         "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "tickers_analyzed": len(raw_signals),
@@ -186,10 +176,9 @@ def update_weights():
 
     import pandas as pd
     signals_df = pd.read_parquet(config.SIGNALS_PATH)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     reward_computer = RewardComputer()
-    rewards = reward_computer.compute(signals_df, closing, today,
+    rewards = reward_computer.compute(signals_df, closing, None,
                                       alpha=config.ALPHA, beta=config.BETA)
     log.info("Avg reward: %.4f over %d positions", sum(rewards.values()) / max(len(rewards), 1), len(rewards))
 
