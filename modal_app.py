@@ -12,7 +12,6 @@ image = (
         "alpaca-py>=0.26.0",
         "pandas>=2.0.0",
         "numpy>=1.24.0",
-        "pandas-ta>=0.3.14b0",
         "fredapi>=0.5.0",
         "finnhub-python>=2.4.20",
         "requests>=2.31.0",
@@ -178,11 +177,9 @@ def update_weights():
     log = get_logger("weight_update")
     log.info("=== Weight Update start %s ===", datetime.now(timezone.utc).isoformat())
 
-    # ── 1. Fetch today's closing prices ──────────────────────────────────────
     ingestor = DataIngestor()
     closing = ingestor.fetch_closing_prices(config.TICKER_UNIVERSE)
 
-    # ── 2. Load persisted signals ────────────────────────────────────────────
     if not os.path.exists(config.SIGNALS_PATH):
         log.warning("No signals file found — skipping update")
         return
@@ -191,13 +188,11 @@ def update_weights():
     signals_df = pd.read_parquet(config.SIGNALS_PATH)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # ── 3. Compute reward ────────────────────────────────────────────────────
     reward_computer = RewardComputer()
     rewards = reward_computer.compute(signals_df, closing, today,
                                       alpha=config.ALPHA, beta=config.BETA)
     log.info("Avg reward: %.4f over %d positions", sum(rewards.values()) / max(len(rewards), 1), len(rewards))
 
-    # ── 4. Load model ────────────────────────────────────────────────────────
     device = torch.device("cuda")
     model = NCPTradingModel(
         num_stocks=len(config.TICKER_UNIVERSE),
@@ -214,12 +209,10 @@ def update_weights():
     if os.path.exists(weights):
         model.load_state_dict(torch.load(weights, map_location=device))
 
-    # ── 5. Online RL update ──────────────────────────────────────────────────
     updater = OnlineUpdater(model, lr=config.LEARNING_RATE)
     avg_reward = updater.update(signals_df, rewards, device, config.TICKER_UNIVERSE)
     log.info("Update complete — avg reward: %.4f", avg_reward)
 
-    # ── 6. Save weights ──────────────────────────────────────────────────────
     torch.save(model.state_dict(), config.WEIGHTS_LATEST_PATH)
     vol.commit()
     log.info("Weights saved to %s", config.WEIGHTS_LATEST_PATH)
@@ -254,7 +247,6 @@ def train_historical():
     )
 
     torch.save(model.state_dict(), config.WEIGHTS_BASE_PATH)
-    # Also write as latest so Cron 1 can pick it up immediately
     torch.save(model.state_dict(), config.WEIGHTS_LATEST_PATH)
     vol.commit()
     log.info("Training done — weights saved to %s", config.WEIGHTS_BASE_PATH)
