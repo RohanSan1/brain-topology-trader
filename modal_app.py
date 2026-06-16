@@ -12,7 +12,6 @@ image = (
         "alpaca-py>=0.26.0",
         "pandas>=2.0.0",
         "numpy>=1.24.0",
-        "fredapi>=0.5.0",
         "finnhub-python>=2.4.20",
         "requests>=2.31.0",
         "pyarrow>=14.0.0",
@@ -29,9 +28,10 @@ _secrets = [
 ]
 
 
+# ── Cron 1: disabled until Alpaca + SMTP are wired ──────────────────────────
+# Re-enable by adding: schedule=modal.Cron("30 17 * * *")
 @app.function(
     image=image,
-    schedule=modal.Cron("30 17 * * *"),
     secrets=_secrets,
     volumes={"/data": vol},
     cpu=4,
@@ -40,7 +40,7 @@ _secrets = [
     timeout=3600,
 )
 def run_inference_and_execute():
-    """Cron 1 — 17:30 UTC daily: fetch data, run NCP inference, execute trades."""
+    """Inference + execution. Manually trigger: modal run modal_app.py::run_inference_and_execute"""
     import os
     import torch
     from datetime import datetime, timezone
@@ -143,16 +143,17 @@ def run_inference_and_execute():
     log.info("Done — %d orders placed", len(orders))
 
 
+# ── Cron 2: disabled until Alpaca + SMTP are wired ──────────────────────────
+# Re-enable by adding: schedule=modal.Cron("0 22 * * *")
 @app.function(
     image=image,
-    schedule=modal.Cron("0 22 * * *"),
     secrets=_secrets,
     volumes={"/data": vol},
     gpu="A10G",
     timeout=7200,
 )
 def update_weights():
-    """Cron 2 — 22:00 UTC daily: compute reward, policy-gradient update, save weights."""
+    """EOD weight update. Manually trigger: modal run modal_app.py::update_weights"""
     import os
     import torch
     from datetime import datetime, timezone
@@ -216,7 +217,7 @@ def update_weights():
     memory=32768,
 )
 def train_historical():
-    """One-time historical training.  Run: modal run modal_app.py::train_historical"""
+    """One-time historical training.  Run: modal run --detach modal_app.py::train_historical"""
     import torch
     from datetime import datetime, timezone
 
