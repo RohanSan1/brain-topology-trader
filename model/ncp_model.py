@@ -34,8 +34,8 @@ class NCPTradingModel(nn.Module):
             output_size=ncp_output_size,
             sparsity_level=ncp_sparsity,
         )
-        # LTC input_size = feature_dim + embedding_dim (embedding broadcast across seq)
-        self.ltc = LTC(input_size=input_size, wiring=wiring, batch_first=True)
+        # LTC input_size = feature_dim + embedding_dim; wiring passed as units arg (ncps 1.0+)
+        self.ltc = LTC(input_size, wiring, batch_first=True)
 
     def forward(
         self,
