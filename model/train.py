@@ -32,6 +32,7 @@ class HistoricalTrainer:
         tickers: list[str],
         start_date: str,
         end_date: str,
+        checkpoint_fn=None,
     ) -> NCPTradingModel:
         import yfinance as yf
 
@@ -162,7 +163,7 @@ class HistoricalTrainer:
         dataset = TensorDataset(X, idx_t, y)
         loader = DataLoader(
             dataset, batch_size=config.BATCH_SIZE, shuffle=True,
-            num_workers=4, pin_memory=True,
+            num_workers=8, pin_memory=True, persistent_workers=True, prefetch_factor=2,
         )
 
         # ── Model ────────────────────────────────────────────────────────────
@@ -180,6 +181,7 @@ class HistoricalTrainer:
             optimizer, T_max=config.HISTORICAL_EPOCHS,
         )
         criterion = nn.CrossEntropyLoss()
+        scaler = torch.cuda.amp.GradScaler() if device.type == "cuda" else None
 
         # ── Training loop ────────────────────────────────────────────────────
         for epoch in range(config.HISTORICAL_EPOCHS):
@@ -190,11 +192,21 @@ class HistoricalTrainer:
             for xb, ib, yb in loader:
                 xb, ib, yb = xb.to(device), ib.to(device), yb.to(device)
                 optimizer.zero_grad()
-                probs = model(xb, ib)
-                loss = criterion(probs, yb)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
+                if scaler is not None:
+                    with torch.cuda.amp.autocast():
+                        probs = model(xb, ib)
+                        loss = criterion(probs, yb)
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    probs = model(xb, ib)
+                    loss = criterion(probs, yb)
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
                 total_loss += loss.item() * len(yb)
                 correct += (probs.argmax(1) == yb).sum().item()
                 n += len(yb)
@@ -204,5 +216,7 @@ class HistoricalTrainer:
                 epoch + 1, config.HISTORICAL_EPOCHS,
                 total_loss / n, correct / n, scheduler.get_last_lr()[0],
             )
+            if checkpoint_fn is not None:
+                checkpoint_fn(model, epoch + 1)
 
         return model
