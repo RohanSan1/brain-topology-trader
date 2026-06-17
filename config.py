@@ -1,16 +1,17 @@
 # Model hyperparameters
-NCP_UNITS = 64
+NCP_UNITS = 128
 NCP_OUTPUT_SIZE = 3          # 0=buy, 1=hold, 2=sell
 NCP_SPARSITY = 0.5
-EMBEDDING_DIM = 16
-SEQUENCE_LENGTH = 20         # days of history fed to LTC
+EMBEDDING_DIM = 32
+SEQUENCE_LENGTH = 60         # days of history fed to CfC
 NUM_FEATURES = 17            # features per stock per day
-INPUT_SIZE = NUM_FEATURES + EMBEDDING_DIM  # 33
+INPUT_SIZE = NUM_FEATURES + EMBEDDING_DIM  # 49
 
 # Training
 LEARNING_RATE = 1e-4
-BATCH_SIZE = 1024
-HISTORICAL_EPOCHS = 50
+BATCH_SIZE = 512
+HISTORICAL_EPOCHS = 30
+RETURN_HORIZON = 5           # predict 5-day forward return
 HISTORICAL_START = "2000-01-01"
 HISTORICAL_END = "2024-12-31"
 
@@ -129,4 +130,17 @@ TICKER_UNIVERSE = [
     "FICO", "VRNS", "BLKB", "PCOR", "GWRE", "RGEN", "NEOG", "AEIS", "UFPI",
     "BLDR", "MDC", "TMHC", "KBH", "BZH", "NVR", "PHM", "TOL", "DHI", "LEN",
     "MHO", "SNAP", "PINS", "MTCH", "IAC", "ZG", "OPEN", "RDFN",
+    # ── Survivorship bias correction: historically significant, now delisted/acquired ──
+    # Financial crisis failures (teaches model to avoid pre-collapse patterns)
+    "LEH", "BSC", "MER", "CFC", "WB",
+    # Accounting scandals
+    "ENE", "WCOM",
+    # Tech failures / acquisitions
+    "PALM", "SUNW", "MOT", "Q",
+    # Retail failures
+    "SHLD", "RSH", "BBBY", "EK",
+    # GSEs under conservatorship
+    "FNM", "FRE",
+    # Other notable delisted
+    "SPLS", "JCP", "AWE", "GLBC",
 ]
