@@ -1,4 +1,4 @@
-"""Feature engineering: 17 features per stock per day."""
+"""Feature engineering: 22 features per stock per day."""
 import logging
 
 import numpy as np
@@ -6,7 +6,6 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-# Feature index mapping (must stay in sync with config.NUM_FEATURES = 17)
 FEATURE_NAMES = [
     "returns_1d",          # 0
     "returns_5d",          # 1
@@ -21,12 +20,17 @@ FEATURE_NAMES = [
     "bollinger_width",     # 10
     "vix",                 # 11
     "yield_curve_slope",   # 12
-    "spy_1d_return",       # 13  — replaced fed_funds_rate; SPY daily return as market breadth
+    "spy_1d_return",       # 13
     "sentiment_3d",        # 14
     "momentum_rank",       # 15
     "price_to_sma20",      # 16
+    "dist_52w_high",       # 17  — distance from 52-week high (mean reversion)
+    "dist_52w_low",        # 18  — distance from 52-week low  (support signal)
+    "volume_trend",        # 19  — vol MA20/MA60 ratio (institutional activity)
+    "roc_60",              # 20  — 60-day momentum (intermediate trend)
+    "volatility_ratio",    # 21  — current ATR vs 60-day avg (vol regime)
 ]
-assert len(FEATURE_NAMES) == 17
+assert len(FEATURE_NAMES) == 22
 
 
 class FeatureEngineer:
@@ -36,7 +40,7 @@ class FeatureEngineer:
         macro: dict[str, float],
         sentiment: dict[str, float],
     ) -> dict[str, np.ndarray | None]:
-        """Return {ticker: ndarray(n_days, 17)} for all tickers with enough data."""
+        """Return {ticker: ndarray(n_days, 22)} for all tickers with enough data."""
 
         momentum_20d: dict[str, float] = {}
         stock_features: dict[str, pd.DataFrame] = {}
@@ -50,7 +54,6 @@ class FeatureEngineer:
             except Exception as exc:
                 log.debug("Feature error %s: %s", ticker, exc)
 
-        # Cross-sectional momentum rank
         mom_series = pd.Series(momentum_20d)
         ranks = mom_series.rank(pct=True)
 
@@ -114,13 +117,31 @@ class FeatureEngineer:
             (high - close.shift()).abs(),
             (low - close.shift()).abs(),
         ], axis=1).max(axis=1)
-        feat["atr_14"] = tr.rolling(14).mean() / close.replace(0, 1)
+        raw_atr = tr.rolling(14).mean()
+        feat["atr_14"] = raw_atr / close.replace(0, 1)
 
         sma20 = close.rolling(20).mean()
         std20 = close.rolling(20).std()
         feat["bollinger_width"] = (sma20 + 2 * std20 - (sma20 - 2 * std20)) / sma20.replace(0, 1)
-
         feat["price_to_sma20"] = (close / sma20.replace(0, 1)) - 1
+
+        # 52-week high/low distance
+        high_252 = close.rolling(252, min_periods=20).max()
+        low_252 = close.rolling(252, min_periods=20).min()
+        feat["dist_52w_high"] = (close / high_252.replace(0, 1)) - 1
+        feat["dist_52w_low"] = (close / low_252.replace(0, 1)) - 1
+
+        # Volume trend: 20-day vs 60-day moving average
+        vol_ma20 = volume.rolling(20).mean()
+        vol_ma60 = volume.rolling(60, min_periods=20).mean().replace(0, 1)
+        feat["volume_trend"] = (vol_ma20 / vol_ma60) - 1
+
+        # 60-day rate of change
+        feat["roc_60"] = close.pct_change(60) * 100
+
+        # Volatility regime: current ATR vs 60-day average
+        atr_ma60 = raw_atr.rolling(60, min_periods=14).mean().replace(0, 1)
+        feat["volatility_ratio"] = (raw_atr / atr_ma60) - 1
 
         # Macro + cross-sectional — filled by caller
         feat["vix"] = 0.0
