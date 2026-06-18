@@ -1,4 +1,4 @@
-"""3-day signal smoothing, confidence thresholding, and trade ranking."""
+"""Signal smoothing, confidence thresholding, and trade ranking — v3 binary (down/up)."""
 import logging
 import os
 from collections import deque
@@ -10,8 +10,8 @@ import config
 
 log = logging.getLogger(__name__)
 
-# Class indices
-BUY, HOLD, SELL = 0, 1, 2
+# Class indices for binary output
+DOWN, UP = 0, 1
 
 
 class SignalProcessor:
@@ -35,11 +35,11 @@ class SignalProcessor:
 
     def smooth_and_rank(
         self,
-        raw_signals: dict[str, list[float]],  # {ticker: [p_buy, p_hold, p_sell]}
+        raw_signals: dict[str, list[float]],  # {ticker: [p_down, p_up]}
     ) -> dict[str, dict]:
         """
         Merge today's raw signals with the last N-1 days from Volume.
-        Returns {ticker: {side, score, confidence, p_buy, p_sell}}.
+        Returns {ticker: {side, score, confidence, p_up, p_down}}.
         """
         history = self._load_history()
         smoothed: dict[str, dict] = {}
@@ -47,26 +47,26 @@ class SignalProcessor:
         for ticker, probs in raw_signals.items():
             past = history.get(ticker, [])
             window = past[-(config.SIGNAL_SMOOTH_DAYS - 1):] + [probs]
-            arr = np.array(window)                    # (<=3, 3)
-            mean_probs = arr.mean(axis=0)             # (3,)
+            arr = np.array(window)              # (<=3, 2)
+            mean_probs = arr.mean(axis=0)       # (2,)
 
-            p_buy = float(mean_probs[BUY])
-            p_sell = float(mean_probs[SELL])
-            score = p_buy - p_sell                    # positive → bullish
+            p_down = float(mean_probs[DOWN])
+            p_up = float(mean_probs[UP])
+            score = p_up - p_down               # positive → bullish
 
-            if p_buy > p_sell:
+            if p_up > p_down:
                 side = "buy"
-                confidence = p_buy
+                confidence = p_up
             else:
                 side = "sell"
-                confidence = p_sell
+                confidence = p_down
 
             smoothed[ticker] = {
                 "side": side,
                 "score": score,
                 "confidence": confidence,
-                "p_buy": p_buy,
-                "p_sell": p_sell,
+                "p_up": p_up,
+                "p_down": p_down,
             }
 
         log.info("Smoothed signals for %d tickers", len(smoothed))
