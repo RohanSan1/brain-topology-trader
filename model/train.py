@@ -1,4 +1,4 @@
-"""One-time historical supervised training — v3: binary labels, sector embeddings, SGDR."""
+"""Historical supervised training — v4: quartile excess-return labels, focal loss, attention head."""
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s — %(message)s")
@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 import config
@@ -16,13 +17,17 @@ from model.ncp_model import NCPTradingModel
 log = logging.getLogger(__name__)
 
 
-def _binary_label(close_series: pd.Series) -> pd.Series:
-    """Binary label based on 5-day forward return: 1=up (ret>0), 0=down (ret<=0)."""
-    ret = close_series.pct_change(5).shift(-5)
-    labels = pd.Series(-1, index=close_series.index, dtype=np.int64)
-    labels[ret > 0] = 1
-    labels[ret <= 0] = 0
-    return labels
+class FocalLoss(nn.Module):
+    """Focal loss: down-weights easy examples so the model focuses on hard ones."""
+    def __init__(self, gamma: float = 2.0, weight: torch.Tensor = None) -> None:
+        super().__init__()
+        self.gamma = gamma
+        self.weight = weight
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        ce = F.cross_entropy(logits, targets, weight=self.weight, reduction="none")
+        pt = torch.exp(-ce)
+        return ((1 - pt) ** self.gamma * ce).mean()
 
 
 class HistoricalTrainer:
@@ -43,6 +48,7 @@ class HistoricalTrainer:
         # ── Fetch macro once ─────────────────────────────────────────────────
         log.info("Fetching macro history (^VIX, ^TNX, ^IRX, SPY)…")
         macro_df = None
+        spy_5d_fwd = None
         try:
             macro_raw = yf.download(
                 ["^VIX", "^TNX", "^IRX", "SPY"],
@@ -54,6 +60,7 @@ class HistoricalTrainer:
             mc = mc.rename(columns={"^VIX": "vix"})
             mc["yield_curve_slope"] = mc["^TNX"] - mc["^IRX"]
             mc["spy_1d_return"] = mc["SPY"].pct_change(1)
+            spy_5d_fwd = mc["SPY"].pct_change(5).shift(-5)        # 5-day forward SPY return
             macro_df = mc[["vix", "yield_curve_slope", "spy_1d_return"]].ffill().fillna(0.0)
             log.info("Macro loaded: %d rows", len(macro_df))
         except Exception as exc:
@@ -128,11 +135,27 @@ class HistoricalTrainer:
 
         log.info("Pass 1 done: %d tickers with features", len(all_feat_dfs))
 
-        # ── Compute daily cross-sectional momentum rank ──────────────────────
-        log.info("Computing daily cross-sectional momentum rank panel…")
+        # ── Cross-sectional momentum rank ─────────────────────────────────────
+        log.info("Computing cross-sectional momentum rank panel…")
         returns_panel = pd.DataFrame({t: fd["returns_20d"] for t, fd in all_feat_dfs.items()})
         rank_panel = returns_panel.rank(axis=1, pct=True).fillna(0.5)
-        log.info("Rank panel: %d dates × %d tickers", len(rank_panel), len(rank_panel.columns))
+
+        # ── Cross-sectional quartile labels (excess return over SPY) ─────────
+        log.info("Computing cross-sectional quartile label panel…")
+        fwd_excess: dict[str, pd.Series] = {}
+        for ticker, feat_df in all_feat_dfs.items():
+            close = all_close[ticker].reindex(feat_df.index)
+            stock_5d = close.pct_change(5).shift(-5)
+            if spy_5d_fwd is not None:
+                spy_aligned = spy_5d_fwd.reindex(feat_df.index, method="ffill").fillna(0.0)
+                fwd_excess[ticker] = stock_5d - spy_aligned
+            else:
+                fwd_excess[ticker] = stock_5d
+
+        excess_df = pd.DataFrame(fwd_excess)
+        q_low = excess_df.quantile(config.QUARTILE_THRESHOLD, axis=1)   # bottom 25%
+        q_high = excess_df.quantile(1 - config.QUARTILE_THRESHOLD, axis=1)  # top 25%
+        log.info("Quartile panel: %d dates × %d tickers", len(excess_df), len(excess_df.columns))
 
         # ── Pass 2: fill cross-sectional features + build samples ────────────
         log.info("Pass 2: building training samples…")
@@ -160,19 +183,33 @@ class HistoricalTrainer:
                     abnormal = stock_3d
                 feat_df["sentiment_3d"] = abnormal.clip(-0.15, 0.15) / 0.15
 
-                close = all_close[ticker].reindex(feat_df.index)
-                label_arr = _binary_label(close).fillna(-1).astype(int).values
-
                 feat_arr = feat_df[FEATURE_NAMES].values.astype(np.float32)
                 feat_arr = np.nan_to_num(feat_arr, nan=0.0, posinf=0.0, neginf=0.0)
 
                 ticker_idx = ticker_to_idx.get(ticker, 0)
-                sector_idx = config.TICKER_SECTOR.get(ticker, 12)  # default: Other
+                sector_idx = config.TICKER_SECTOR.get(ticker, 12)
+
+                ticker_excess = fwd_excess.get(ticker)
 
                 for i in range(config.SEQUENCE_LENGTH, len(feat_arr) - config.RETURN_HORIZON):
-                    label = int(label_arr[i])
-                    if label not in (0, 1):
+                    if ticker_excess is None:
                         continue
+                    date = feat_df.index[i]
+                    if date not in q_low.index:
+                        continue
+                    exc_ret = ticker_excess.iloc[i] if i < len(ticker_excess) else np.nan
+                    if pd.isna(exc_ret):
+                        continue
+                    ql, qh = q_low.loc[date], q_high.loc[date]
+                    if pd.isna(ql) or pd.isna(qh):
+                        continue
+                    if exc_ret >= qh:
+                        label = 1   # top quartile — outperforms market
+                    elif exc_ret <= ql:
+                        label = 0   # bottom quartile — underperforms market
+                    else:
+                        continue    # middle 50% — skip noisy zone
+
                     all_X.append(feat_arr[i - config.SEQUENCE_LENGTH: i])
                     all_y.append(label)
                     all_idx.append(ticker_idx)
@@ -186,13 +223,12 @@ class HistoricalTrainer:
 
         log.info("Total training samples: %d", len(all_X))
 
-        # Weighted CrossEntropy — inverse frequency weights (2-class)
         y_np = np.array(all_y)
         counts = np.bincount(y_np, minlength=2).astype(np.float32)
-        log.info("Class distribution — down: %d | up: %d", *counts.astype(int))
+        log.info("Class distribution — underperform: %d | outperform: %d", *counts.astype(int))
         weights = 1.0 / counts.clip(min=1)
         weights = weights / weights.mean()
-        log.info("Class weights — down: %.3f | up: %.3f", *weights)
+        log.info("Class weights — underperform: %.3f | outperform: %.3f", *weights)
 
         X = torch.FloatTensor(np.array(all_X)).to(device)
         y = torch.LongTensor(all_y).to(device)
@@ -225,10 +261,11 @@ class HistoricalTrainer:
         for pg in optimizer.param_groups:
             pg['initial_lr'] = config.LEARNING_RATE
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            optimizer, T_0=config.SGDR_T0, T_mult=config.SGDR_T_MULT, last_epoch=start_epoch - 1 if start_epoch > 0 else -1,
+            optimizer, T_0=config.SGDR_T0, T_mult=config.SGDR_T_MULT,
+            last_epoch=start_epoch - 1 if start_epoch > 0 else -1,
         )
         class_weights = torch.FloatTensor(weights).to(device)
-        criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=config.LABEL_SMOOTHING)
+        criterion = FocalLoss(gamma=config.FOCAL_GAMMA, weight=class_weights)
 
         # ── Training loop ────────────────────────────────────────────────────
         for epoch in range(start_epoch, config.HISTORICAL_EPOCHS):
@@ -236,13 +273,13 @@ class HistoricalTrainer:
             total_loss, correct, n = 0.0, 0, 0
             for xb, ib, sb, yb in loader:
                 optimizer.zero_grad()
-                probs = model(xb, ib, sb)
-                loss = criterion(probs, yb)
+                logits = model(xb, ib, sb)
+                loss = criterion(logits, yb)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 total_loss += loss.item() * len(yb)
-                correct += (probs.argmax(1) == yb).sum().item()
+                correct += (logits.argmax(1) == yb).sum().item()
                 n += len(yb)
             scheduler.step()
             log.info(
