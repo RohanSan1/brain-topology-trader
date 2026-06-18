@@ -220,6 +220,8 @@ class HistoricalTrainer:
             log.info("Loaded checkpoint weights from %s (resuming epoch %d)", weights_path, start_epoch)
 
         optimizer = torch.optim.Adam(model.parameters(), lr=config.LEARNING_RATE)
+        for pg in optimizer.param_groups:
+            pg['initial_lr'] = config.LEARNING_RATE
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             optimizer, T_0=config.SGDR_T0, T_mult=config.SGDR_T_MULT, last_epoch=start_epoch - 1 if start_epoch > 0 else -1,
         )
