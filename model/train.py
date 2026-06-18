@@ -1,4 +1,4 @@
-"""One-time historical supervised training (25 years, 5-day labels, cross-sectional features)."""
+"""One-time historical supervised training — v3: binary labels, sector embeddings, SGDR."""
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s — %(message)s")
@@ -16,13 +16,12 @@ from model.ncp_model import NCPTradingModel
 log = logging.getLogger(__name__)
 
 
-def _5day_label(close_series: pd.Series) -> pd.Series:
-    """3-class label based on 5-day forward return: 0=buy(>+1%), 1=hold, 2=sell(<-1%)."""
+def _binary_label(close_series: pd.Series) -> pd.Series:
+    """Binary label based on 5-day forward return: 1=up (ret>0), 0=down (ret<=0)."""
     ret = close_series.pct_change(5).shift(-5)
-    labels = pd.Series(1, index=close_series.index, dtype=np.int64)
-    labels[ret > 0.01] = 0
-    labels[ret < -0.01] = 2
-    labels[ret.isna()] = -1
+    labels = pd.Series(-1, index=close_series.index, dtype=np.int64)
+    labels[ret > 0] = 1
+    labels[ret <= 0] = 0
     return labels
 
 
@@ -60,7 +59,6 @@ class HistoricalTrainer:
         except Exception as exc:
             log.warning("Macro fetch failed: %s — using stubs", exc)
 
-        # Precompute SPY 3-day cumulative return for sentiment proxy
         spy_3d_cum = None
         if macro_df is not None:
             spy_3d_cum = macro_df["spy_1d_return"].rolling(3).sum().fillna(0.0)
@@ -141,12 +139,12 @@ class HistoricalTrainer:
         all_X: list[np.ndarray] = []
         all_y: list[int] = []
         all_idx: list[int] = []
+        all_sector: list[int] = []
 
         for ticker, feat_df in all_feat_dfs.items():
             try:
                 feat_df = feat_df.copy()
 
-                # Real cross-sectional momentum rank
                 if ticker in rank_panel.columns:
                     feat_df["momentum_rank"] = (
                         rank_panel[ticker].reindex(feat_df.index).ffill().fillna(0.5).values
@@ -154,7 +152,6 @@ class HistoricalTrainer:
                 else:
                     feat_df["momentum_rank"] = 0.5
 
-                # Sentiment proxy: 3-day abnormal return vs SPY, normalised to [-1, 1]
                 stock_3d = feat_df["returns_1d"].rolling(3).sum().fillna(0.0)
                 if spy_3d_cum is not None:
                     spy_aligned = spy_3d_cum.reindex(feat_df.index, method="ffill").fillna(0.0)
@@ -163,21 +160,23 @@ class HistoricalTrainer:
                     abnormal = stock_3d
                 feat_df["sentiment_3d"] = abnormal.clip(-0.15, 0.15) / 0.15
 
-                # 5-day forward labels
                 close = all_close[ticker].reindex(feat_df.index)
-                label_arr = _5day_label(close).fillna(-1).astype(int).values
+                label_arr = _binary_label(close).fillna(-1).astype(int).values
 
                 feat_arr = feat_df[FEATURE_NAMES].values.astype(np.float32)
                 feat_arr = np.nan_to_num(feat_arr, nan=0.0, posinf=0.0, neginf=0.0)
 
                 ticker_idx = ticker_to_idx.get(ticker, 0)
+                sector_idx = config.TICKER_SECTOR.get(ticker, 12)  # default: Other
+
                 for i in range(config.SEQUENCE_LENGTH, len(feat_arr) - config.RETURN_HORIZON):
                     label = int(label_arr[i])
-                    if label not in (0, 1, 2):
+                    if label not in (0, 1):
                         continue
                     all_X.append(feat_arr[i - config.SEQUENCE_LENGTH: i])
                     all_y.append(label)
                     all_idx.append(ticker_idx)
+                    all_sector.append(sector_idx)
 
             except Exception as exc:
                 log.warning("Skipping %s in pass 2: %s", ticker, exc)
@@ -187,19 +186,20 @@ class HistoricalTrainer:
 
         log.info("Total training samples: %d", len(all_X))
 
-        # Weighted CrossEntropy — inverse frequency weights to fix class imbalance
+        # Weighted CrossEntropy — inverse frequency weights (2-class)
         y_np = np.array(all_y)
-        counts = np.bincount(y_np, minlength=3).astype(np.float32)
-        log.info("Class distribution — buy: %d | hold: %d | sell: %d", *counts.astype(int))
+        counts = np.bincount(y_np, minlength=2).astype(np.float32)
+        log.info("Class distribution — down: %d | up: %d", *counts.astype(int))
         weights = 1.0 / counts.clip(min=1)
         weights = weights / weights.mean()
-        log.info("Class weights — buy: %.3f | hold: %.3f | sell: %.3f", *weights)
+        log.info("Class weights — down: %.3f | up: %.3f", *weights)
 
         X = torch.FloatTensor(np.array(all_X))
         y = torch.LongTensor(all_y)
         idx_t = torch.LongTensor(all_idx)
+        sec_t = torch.LongTensor(all_sector)
 
-        dataset = TensorDataset(X, idx_t, y)
+        dataset = TensorDataset(X, idx_t, sec_t, y)
         loader = DataLoader(
             dataset, batch_size=config.BATCH_SIZE, shuffle=True,
             num_workers=8, pin_memory=True, persistent_workers=True, prefetch_factor=2,
@@ -213,6 +213,8 @@ class HistoricalTrainer:
             ncp_output_size=config.NCP_OUTPUT_SIZE,
             ncp_sparsity=config.NCP_SPARSITY,
             embedding_dim=config.EMBEDDING_DIM,
+            num_sectors=config.NUM_SECTORS,
+            sector_embedding_dim=config.SECTOR_EMBEDDING_DIM,
         ).to(device)
 
         if weights_path and start_epoch > 0:
@@ -220,10 +222,8 @@ class HistoricalTrainer:
             log.info("Loaded checkpoint weights from %s (resuming epoch %d)", weights_path, start_epoch)
 
         optimizer = torch.optim.Adam(model.parameters(), lr=config.LEARNING_RATE)
-        for pg in optimizer.param_groups:
-            pg['initial_lr'] = config.LEARNING_RATE
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=config.HISTORICAL_EPOCHS, last_epoch=start_epoch
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=config.SGDR_T0, T_mult=config.SGDR_T_MULT, last_epoch=start_epoch - 1 if start_epoch > 0 else -1,
         )
         class_weights = torch.FloatTensor(weights).to(device)
         criterion = nn.CrossEntropyLoss(weight=class_weights)
@@ -232,10 +232,10 @@ class HistoricalTrainer:
         for epoch in range(start_epoch, config.HISTORICAL_EPOCHS):
             model.train()
             total_loss, correct, n = 0.0, 0, 0
-            for xb, ib, yb in loader:
-                xb, ib, yb = xb.to(device), ib.to(device), yb.to(device)
+            for xb, ib, sb, yb in loader:
+                xb, ib, sb, yb = xb.to(device), ib.to(device), sb.to(device), yb.to(device)
                 optimizer.zero_grad()
-                probs = model(xb, ib)
+                probs = model(xb, ib, sb)
                 loss = criterion(probs, yb)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
