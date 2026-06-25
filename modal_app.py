@@ -73,7 +73,8 @@ def run_inference_and_execute():
     import torch.nn.functional as F
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = NCPTradingModel(
+
+    _model_kwargs = dict(
         num_stocks=len(config.TICKER_UNIVERSE),
         num_features=config.NUM_FEATURES,
         input_size=config.INPUT_SIZE,
@@ -84,18 +85,32 @@ def run_inference_and_execute():
         num_sectors=config.NUM_SECTORS,
         sector_embedding_dim=config.SECTOR_EMBEDDING_DIM,
         dropout=0.0,
-    ).to(device)
+    )
 
-    weights = config.WEIGHTS_LATEST_PATH
-    if not os.path.exists(weights):
-        weights = config.WEIGHTS_BASE_PATH
-    if os.path.exists(weights):
-        model.load_state_dict(torch.load(weights, map_location=device))
-        log.info("Loaded weights from %s", weights)
-    else:
-        log.warning("No weights found — using random init")
+    _seed_weight_paths = [
+        "/data/ncp_weights_base.pt",
+        "/data/ncp_weights_seed2.pt",
+        "/data/ncp_weights_seed3.pt",
+        "/data/ncp_weights_seed4.pt",
+    ]
+    ensemble_models = []
+    for wp in _seed_weight_paths:
+        if os.path.exists(wp):
+            m = NCPTradingModel(**_model_kwargs).to(device)
+            m.load_state_dict(torch.load(wp, map_location=device))
+            m.eval()
+            ensemble_models.append(m)
+            log.info("Loaded ensemble member: %s", wp)
+        else:
+            log.warning("Ensemble weight missing (skipped): %s", wp)
 
-    model.eval()
+    if not ensemble_models:
+        log.warning("No ensemble weights found — using random init")
+        ensemble_models = [NCPTradingModel(**_model_kwargs).to(device)]
+        ensemble_models[0].eval()
+
+    log.info("Ensemble size: %d models", len(ensemble_models))
+
     ticker_to_idx = {t: i for i, t in enumerate(config.TICKER_UNIVERSE)}
 
     raw_signals: dict[str, list[float]] = {}
@@ -106,8 +121,9 @@ def run_inference_and_execute():
             x = torch.FloatTensor(feat_seq[-config.SEQUENCE_LENGTH:]).unsqueeze(0).to(device)
             idx = torch.LongTensor([ticker_to_idx.get(ticker, 0)]).to(device)
             sec = torch.LongTensor([config.TICKER_SECTOR.get(ticker, 12)]).to(device)
-            logits = model(x, idx, sec)
-            probs = F.softmax(logits, dim=-1)
+            # Average softmax probabilities across all ensemble members
+            member_probs = [F.softmax(m(x, idx, sec), dim=-1) for m in ensemble_models]
+            probs = torch.stack(member_probs).mean(dim=0)
             raw_signals[ticker] = probs.squeeze(0).cpu().tolist()
 
     log.info("Inference complete: %d tickers", len(raw_signals))
