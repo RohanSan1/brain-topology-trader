@@ -6,8 +6,8 @@ EMBEDDING_DIM = 32
 SECTOR_EMBEDDING_DIM = 8     # v3: learned sector embedding
 NUM_SECTORS = 13             # 0-12 + unknown
 SEQUENCE_LENGTH = 120        # v4: doubled context window
-NUM_FEATURES = 22            # v4: +5 features (52w high/low, vol trend, roc60, vol ratio)
-INPUT_SIZE = NUM_FEATURES + EMBEDDING_DIM + SECTOR_EMBEDDING_DIM  # 62
+NUM_FEATURES = 25            # v5: +3 alt-data features (earnings_surprise, short_vol_ratio, pc_ratio)
+INPUT_SIZE = NUM_FEATURES + EMBEDDING_DIM + SECTOR_EMBEDDING_DIM  # 65
 
 # Training
 LEARNING_RATE = 1e-4
