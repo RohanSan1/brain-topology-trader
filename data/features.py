@@ -138,24 +138,17 @@ class FeatureEngineer:
                 self._earnings = {}
 
         # ── short_vol_ratio ────────────────────────────────────────────────
-        # Build a dict[str, pd.Series(date -> ratio)] with daily frequency
-        # (forward-filled from bi-monthly source).
-        self._short_vol: dict[str, pd.Series] = {}
+        # Static per-ticker scalar from yfinance snapshot (shortPercentOfFloat).
+        self._short_vol: dict[str, float] = {}
         raw_short = _load_parquet_safe(_SHORT_INT_PATH, "short_interest")
         if raw_short is not None:
             try:
                 raw_short = raw_short.copy()
-                raw_short["date"] = pd.to_datetime(raw_short["date"]).dt.normalize()
-                # Compute ratio; guard against zero total_volume
-                total = raw_short["total_volume"].replace(0, np.nan)
-                raw_short["ratio"] = (raw_short["short_volume"] / total).clip(0.0, 1.0)
-                for ticker, grp in raw_short.groupby("ticker"):
-                    s = grp.set_index("date")["ratio"].sort_index()
-                    # Forward-fill bi-monthly → daily using a daily reindex
-                    if len(s) >= 2:
-                        daily_idx = pd.date_range(s.index[0], s.index[-1], freq="D")
-                        s = s.reindex(daily_idx).ffill()
-                    self._short_vol[ticker] = s
+                if "short_vol_ratio" in raw_short.columns:
+                    self._short_vol = dict(zip(
+                        raw_short["ticker"],
+                        raw_short["short_vol_ratio"].clip(0.0, 1.0).astype(float)
+                    ))
                 log.info("short_vol_ratio: %d tickers loaded", len(self._short_vol))
             except Exception as exc:
                 log.warning("Failed to process short_interest: %s", exc)
@@ -317,12 +310,8 @@ class FeatureEngineer:
             feat["earnings_surprise"] = merged.fillna(0.0).values
 
         # short_vol_ratio (index 23)
-        # Forward-filled bi-monthly data aligned to feat dates.  Default: 0.5.
-        feat["short_vol_ratio"] = 0.5
-        if ticker and ticker in self._short_vol:
-            sv_s = self._short_vol[ticker]
-            aligned_sv = sv_s.reindex(feat.index, method="ffill")
-            feat["short_vol_ratio"] = aligned_sv.fillna(0.5).values
+        # Static per-ticker scalar (shortPercentOfFloat snapshot). Default: 0.5.
+        feat["short_vol_ratio"] = self._short_vol.get(ticker, 0.5) if ticker else 0.5
 
         # pc_ratio (index 24)
         # Static per-ticker scalar.  Default: 1.0.
