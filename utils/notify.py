@@ -41,7 +41,7 @@ def send_daily_report(report: dict[str, Any]) -> None:
     """Send daily trading summary — tries Telegram first, then email."""
     date = report.get("date", "N/A")
     body = (
-        f"brain-topology-trader Daily Report — {date}\n"
+        f"Brain topology model Daily Report — {date}\n"
         f"{'='*50}\n"
         f"Portfolio Value:   ${report.get('portfolio_value', 0):,.0f}\n"
         f"Tickers Analyzed:  {report.get('tickers_analyzed', 0)}\n"
@@ -49,7 +49,7 @@ def send_daily_report(report: dict[str, Any]) -> None:
         f"\nTop Longs:  {', '.join(report.get('top_longs', []))}\n"
         f"Top Shorts: {', '.join(report.get('top_shorts', []))}\n"
     )
-    subject = f"[brain-topology-trader] {date}"
+    subject = f"[Brain topology model] {date}"
 
     sent = False
     if os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"):
