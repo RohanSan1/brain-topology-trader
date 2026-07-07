@@ -124,8 +124,7 @@ _SECTOR_TICKERS = {
          "EXR","CUBE","NSA","GEO","SAFE","IIPR","COLD","NYMT","NRZ","RWT",
          "RITM","MITT","MFA","TWO","BXMT","LADR","KREF","GPMT","ARCC","OBDC",
          "BXSL","PFLT","TRIN","CSWC","SLRC"],
-    12: ["LEH","BSC","MER","CFC","WB","ENE","WCOM","PALM","SUNW","MOT","Q",
-         "SHLD","RSH","BBBY","EK","FNM","FRE","SPLS","JCP","AWE","GLBC"],
+    12: [],
 }
 TICKER_SECTOR = {t: s for s, ts in _SECTOR_TICKERS.items() for t in ts}
 
@@ -200,7 +199,4 @@ TICKER_UNIVERSE = [
     "RBLX","U","PLTK","APPS","GENI","TTD","PUBM","DV","IAS","MGNI",
     "FICO","VRNS","BLKB","PCOR","GWRE","RGEN","NEOG","AEIS","UFPI",
     "BLDR","MDC","TMHC","KBH","BZH","NVR","PHM","TOL","DHI","LEN",
-    "MHO","SNAP","PINS","MTCH","IAC","ZG","OPEN","RDFN",
-    "LEH","BSC","MER","CFC","WB","ENE","WCOM","PALM","SUNW","MOT","Q",
-    "SHLD","RSH","BBBY","EK","FNM","FRE","SPLS","JCP","AWE","GLBC",
-]
+    "MHO","SNAP","PINS","MTCH","IAC","ZG","OPEN","RDFN"]
