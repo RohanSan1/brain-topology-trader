@@ -194,8 +194,6 @@ TICKER_UNIVERSE = [
     "CUZ","SLG","KRC","EXR","CUBE","NSA","GEO","SAFE","IIPR","COLD",
     "NYMT","NRZ","RWT","RITM","MITT","MFA","TWO","BXMT","LADR",
     "KREF","GPMT","ARCC","OBDC","BXSL","PFLT","TRIN","CSWC","SLRC",
-    "LMT","RTX","NOC","GD","BA","LHX","TDG","BWXT","DRS","MOOG",
-    "HEI","SPR","HXL","HEICO","AVAV",
     "RBLX","U","PLTK","APPS","GENI","TTD","PUBM","DV","IAS","MGNI",
     "FICO","VRNS","BLKB","PCOR","GWRE","RGEN","NEOG","AEIS","UFPI",
     "BLDR","MDC","TMHC","KBH","BZH","NVR","PHM","TOL","DHI","LEN",
