@@ -53,6 +53,7 @@ WEIGHTS_BASE_PATH = "/data/ncp_weights_base.pt"
 SIGNALS_PATH = "/data/signals_history.parquet"
 POSITIONS_PATH = "/data/positions_state.parquet"
 DAILY_SNAPSHOT_PATH = "/data/daily_snapshot.parquet"  # today's p_up/p_down/prev_close for reward computation
+DAILY_FEATURES_PATH = "/data/daily_features.pkl"      # today's feature tensors for update_weights (avoids re-fetch)
 FEATURES_CACHE_PATH = "/data/features_cache.parquet"
 
 # Alpaca
