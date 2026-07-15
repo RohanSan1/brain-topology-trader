@@ -30,15 +30,22 @@ class AlpacaBroker:
         from alpaca.trading.client import TradingClient
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce, PositionSide
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockLatestTradeRequest
 
         self._tc = TradingClient(
             api_key=os.environ["ALPACA_API_KEY"],
             secret_key=os.environ["ALPACA_SECRET_KEY"],
             paper=True,
         )
+        self._dc = StockHistoricalDataClient(
+            api_key=os.environ["ALPACA_API_KEY"],
+            secret_key=os.environ["ALPACA_SECRET_KEY"],
+        )
         self._MarketOrderRequest = MarketOrderRequest
         self._OrderSide = OrderSide
         self._TimeInForce = TimeInForce
+        self._StockLatestTradeRequest = StockLatestTradeRequest
 
     def get_portfolio_value(self) -> float:
         account = _retry(self._tc.get_account)
@@ -106,16 +113,45 @@ class AlpacaBroker:
         self._save_positions()
         return closed
 
+    def _get_latest_price(self, ticker: str) -> float | None:
+        try:
+            resp = self._dc.get_stock_latest_trade(
+                self._StockLatestTradeRequest(symbol_or_symbols=ticker)
+            )
+            return float(resp[ticker].price)
+        except Exception as exc:
+            log.warning("Could not fetch latest price for %s: %s", ticker, exc)
+            return None
+
     def place_order(self, ticker: str, side: str, notional: float) -> dict | None:
         if notional < 1.0:
             return None
         order_side = self._OrderSide.BUY if side == "buy" else self._OrderSide.SELL
-        req = self._MarketOrderRequest(
-            symbol=ticker,
-            notional=round(notional, 2),
-            side=order_side,
-            time_in_force=self._TimeInForce.DAY,
-        )
+
+        if side == "sell":
+            # Alpaca paper rejects fractional short sells — convert to whole shares
+            price = self._get_latest_price(ticker)
+            if not price or price <= 0:
+                log.warning("Skipping short %s — could not get price", ticker)
+                return None
+            import math
+            qty = math.floor(notional / price)
+            if qty < 1:
+                log.warning("Skipping short %s — qty=0 at price=%.2f notional=%.0f", ticker, price, notional)
+                return None
+            req = self._MarketOrderRequest(
+                symbol=ticker,
+                qty=qty,
+                side=order_side,
+                time_in_force=self._TimeInForce.DAY,
+            )
+        else:
+            req = self._MarketOrderRequest(
+                symbol=ticker,
+                notional=round(notional, 2),
+                side=order_side,
+                time_in_force=self._TimeInForce.DAY,
+            )
         try:
             order = _retry(self._tc.submit_order, req)
             log.info("Order: %s %s $%.0f → id=%s", side.upper(), ticker, notional, order.id)
