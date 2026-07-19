@@ -14,7 +14,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Lightning CLI
-        run: pip install lightning
+        run: |
+          pip install lightning
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Start Studio on free CPU machine
         env:
