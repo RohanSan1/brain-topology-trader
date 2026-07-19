@@ -44,15 +44,20 @@ jobs:
 
       - name: Sync repo to Studio
         run: |
-          rsync -az --exclude='.git' --exclude='__pycache__' --exclude='*.pyc' \
-            -e "ssh -i ~/.ssh/lightning_rsa -o StrictHostKeyChecking=no" \
-            ./ s_01kxwct4vhkgz2hg55xkcejvb0@ssh.lightning.ai:/teamspace/studios/this_studio/
+          ssh -i ~/.ssh/lightning_rsa -o StrictHostKeyChecking=no \
+            s_01kxwct4vhkgz2hg55xkcejvb0@ssh.lightning.ai \
+            "cd /teamspace/studios/this_studio && \
+             if [ -d brain-topology-trader ]; then \
+               cd brain-topology-trader && git pull origin main; \
+             else \
+               git clone https://github.com/Rohan5commit/brain-topology-trader.git; \
+             fi"
 
       - name: Run weight update
         run: |
           ssh -i ~/.ssh/lightning_rsa -o StrictHostKeyChecking=no \
             s_01kxwct4vhkgz2hg55xkcejvb0@ssh.lightning.ai \
-            "cd /teamspace/studios/this_studio && \
+            "cd /teamspace/studios/this_studio/brain-topology-trader && \
              pip install -q torch ncps alpaca-py pandas numpy requests pyarrow scikit-learn yfinance 2>/dev/null && \
              TWELVE_DATA_KEY_1='${{ secrets.TWELVE_DATA_KEY_1 }}' \
              TWELVE_DATA_KEY_2='${{ secrets.TWELVE_DATA_KEY_2 }}' \
