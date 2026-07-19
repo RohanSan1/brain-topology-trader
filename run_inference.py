@@ -21,10 +21,11 @@ from execution.broker import AlpacaBroker
 from utils.logger import get_logger
 from utils.notify import send_daily_report
 
-DATA_DIR = os.environ.get("DATA_DIR", "/teamspace/studios/this_studio/data")
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.environ.get("DATA_DIR", os.path.join(REPO_DIR, "run_data"))
+WEIGHTS_DIR = os.environ.get("WEIGHTS_DIR", os.path.join(REPO_DIR, "weights"))
 os.makedirs(DATA_DIR, exist_ok=True)
 
-# Override data paths to use Lightning persistent storage
 config.DAILY_SNAPSHOT_PATH = os.path.join(DATA_DIR, "daily_snapshot.parquet")
 config.DAILY_FEATURES_PATH = os.path.join(DATA_DIR, "daily_features.pkl")
 config.SIGNALS_PATH = os.path.join(DATA_DIR, "signals_history.parquet")
@@ -64,8 +65,8 @@ _model_kwargs = dict(
 )
 
 _online_path = os.path.join(DATA_DIR, "ncp_v5_online.pt")
-_seed1_path = os.path.join(DATA_DIR, "ncp_v5_seed1.pt")
-_seed2_path = os.path.join(DATA_DIR, "ncp_v5_seed2.pt")
+_seed1_path = os.path.join(WEIGHTS_DIR, "ncp_v5_seed1.pt")
+_seed2_path = os.path.join(WEIGHTS_DIR, "ncp_v5_seed2.pt")
 
 _seed_weight_paths = [
     _online_path if os.path.exists(_online_path) else _seed1_path,

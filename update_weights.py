@@ -15,7 +15,10 @@ from data.ingest import DataIngestor
 from model.ncp_model_v5 import NCPTradingModelV5
 from utils.logger import get_logger
 
-DATA_DIR = os.environ.get("DATA_DIR", "/teamspace/studios/this_studio/data")
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.environ.get("DATA_DIR", os.path.join(REPO_DIR, "run_data"))
+WEIGHTS_DIR = os.environ.get("WEIGHTS_DIR", os.path.join(REPO_DIR, "weights"))
+os.makedirs(DATA_DIR, exist_ok=True)
 
 config.DAILY_SNAPSHOT_PATH = os.path.join(DATA_DIR, "daily_snapshot.parquet")
 config.DAILY_FEATURES_PATH = os.path.join(DATA_DIR, "daily_features.pkl")
@@ -62,7 +65,7 @@ model = NCPTradingModelV5(
 ).to(device)
 
 online_path = os.path.join(DATA_DIR, "ncp_v5_online.pt")
-seed1_path = os.path.join(DATA_DIR, "ncp_v5_seed1.pt")
+seed1_path = os.path.join(WEIGHTS_DIR, "ncp_v5_seed1.pt")
 base = online_path if os.path.exists(online_path) else seed1_path
 if os.path.exists(base):
     model.load_state_dict(torch.load(base, map_location=device), strict=False)

@@ -29,12 +29,15 @@ env/
 *.env
 secrets.json
 
-# Data / model artifacts (stored in Modal Volume, not git)
+# Data / model artifacts (runtime state — stored in GitHub artifact, not git)
 *.parquet
-*.pt
 *.pkl
 *.h5
 /data/
+run_data/
+
+# Base model weights are committed under weights/ (force-added)
+# Online/runtime weights (ncp_v5_online.pt) stay in run_data/
 
 # OS
 .DS_Store
@@ -43,3 +46,7 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# OS
+__pycache__/
+*.pyc

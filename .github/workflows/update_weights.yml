@@ -13,83 +13,41 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install Lightning CLI
-        run: |
-          pip install lightning-sdk
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
 
-      - name: Start Studio on free CPU machine
-        env:
-          LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
-          LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
-        run: |
-          lightning studios start \
-            --name brain-topology-trader \
-            --teamspace juy595711-org/deploy-model-project \
-            --machine CPU
+      - name: Install dependencies
+        run: pip install torch ncps pandas numpy requests pyarrow scikit-learn yfinance
 
-      - name: Wait for Studio to be ready
-        run: sleep 45
-
-      - name: Setup SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.LIGHTNING_SSH_PRIVATE_KEY }}" > ~/.ssh/lightning_rsa
-          chmod 600 ~/.ssh/lightning_rsa
-          cat >> ~/.ssh/config << 'EOF'
-          Host ssh.lightning.ai
-            StrictHostKeyChecking no
-            UserKnownHostsFile=/dev/null
-            IdentityFile ~/.ssh/lightning_rsa
-            IdentitiesOnly yes
-          EOF
-
-      - name: Setup Studio environment (venv + packages, idempotent)
-        run: |
-          ssh -i ~/.ssh/lightning_rsa -o StrictHostKeyChecking=no \
-            s_01kxwct4vhkgz2hg55xkcejvb0@ssh.lightning.ai \
-            "set -e
-             VENV=/teamspace/studios/this_studio/venv
-             if [ ! -f \"\$VENV/bin/python\" ]; then
-               sudo apt-get install -y python3-venv python3-pip -qq
-               python3 -m venv \$VENV
-               \$VENV/bin/pip install -q torch ncps alpaca-py pandas numpy requests pyarrow scikit-learn yfinance finnhub-python
-             fi
-             echo ENV_OK"
-
-      - name: Sync repo to Studio
-        run: |
-          ssh -i ~/.ssh/lightning_rsa -o StrictHostKeyChecking=no \
-            s_01kxwct4vhkgz2hg55xkcejvb0@ssh.lightning.ai \
-            "cd /teamspace/studios/this_studio && \
-             if [ -d brain-topology-trader ]; then \
-               cd brain-topology-trader && git pull origin main; \
-             else \
-               git clone https://github.com/Rohan5commit/brain-topology-trader.git; \
-             fi"
+      - name: Restore daily state from inference run
+        uses: actions/download-artifact@v4
+        with:
+          name: daily-state
+          path: run_data/
+        continue-on-error: true
 
       - name: Run weight update
-        run: |
-          ssh -i ~/.ssh/lightning_rsa -o StrictHostKeyChecking=no \
-            s_01kxwct4vhkgz2hg55xkcejvb0@ssh.lightning.ai \
-            "cd /teamspace/studios/this_studio/brain-topology-trader && \
-             TWELVE_DATA_KEY_1='${{ secrets.TWELVE_DATA_KEY_1 }}' \
-             TWELVE_DATA_KEY_2='${{ secrets.TWELVE_DATA_KEY_2 }}' \
-             TWELVE_DATA_KEY_3='${{ secrets.TWELVE_DATA_KEY_3 }}' \
-             TWELVE_DATA_KEY_4='${{ secrets.TWELVE_DATA_KEY_4 }}' \
-             TWELVE_DATA_KEY_5='${{ secrets.TWELVE_DATA_KEY_5 }}' \
-             TWELVE_DATA_KEY_6='${{ secrets.TWELVE_DATA_KEY_6 }}' \
-             TWELVE_DATA_KEY_7='${{ secrets.TWELVE_DATA_KEY_7 }}' \
-             TWELVE_DATA_KEY_8='${{ secrets.TWELVE_DATA_KEY_8 }}' \
-             DATA_DIR='/teamspace/studios/this_studio/data' \
-             /teamspace/studios/this_studio/venv/bin/python update_weights.py"
-
-      - name: Stop Studio
-        if: always()
         env:
-          LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
-          LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}
-        run: |
-          lightning studios stop \
-            --name brain-topology-trader \
-            --teamspace juy595711-org/deploy-model-project
+          TWELVE_DATA_KEY_1: ${{ secrets.TWELVE_DATA_KEY_1 }}
+          TWELVE_DATA_KEY_2: ${{ secrets.TWELVE_DATA_KEY_2 }}
+          TWELVE_DATA_KEY_3: ${{ secrets.TWELVE_DATA_KEY_3 }}
+          TWELVE_DATA_KEY_4: ${{ secrets.TWELVE_DATA_KEY_4 }}
+          TWELVE_DATA_KEY_5: ${{ secrets.TWELVE_DATA_KEY_5 }}
+          TWELVE_DATA_KEY_6: ${{ secrets.TWELVE_DATA_KEY_6 }}
+          TWELVE_DATA_KEY_7: ${{ secrets.TWELVE_DATA_KEY_7 }}
+          TWELVE_DATA_KEY_8: ${{ secrets.TWELVE_DATA_KEY_8 }}
+          DATA_DIR: run_data
+          WEIGHTS_DIR: weights
+        run: python update_weights.py
+
+      - name: Save updated state (includes new online weights)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: daily-state
+          path: run_data/
+          retention-days: 7
+          overwrite: true
